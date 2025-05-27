@@ -1,117 +1,95 @@
-import flet
-from flet import (
-    Page, TextField, ElevatedButton, Column,
-    Text, AlertDialog, Row, ListView, IconButton,
-    icons
-)
+import flet as ft
+from database import Database
 
-def main(page: Page):
-    page.title = "Учёт расходов"
+def main(page: ft.Page):
+    page.title = "Трекер расходов"
+    page.window_width = 1024
+    page.data = 0  # для хранения id при редактировании
 
-    expenses = []  # список из словарей {"name": ..., "amount": ...}
-    total_sum = 0
+    db = Database("expenses.db")
+    db.create_table()
 
-    # Виджеты
-    name_input = TextField(label="Название расхода", width=300)
-    amount_input = TextField(label="Сумма расхода", width=300, keyboard_type="number")
-    expenses_list = Column()
-    total_text = Text("Общая сумма расходов: 0", size=16, weight="bold")
-
-    # Диалог редактирования
-    edit_name = TextField(label="Название")
-    edit_amount = TextField(label="Сумма", keyboard_type="number")
-    edit_dialog = AlertDialog(modal=True)
-
-    def update_total():
-        nonlocal total_sum
-        total_sum = sum(item["amount"] for item in expenses)
-        total_text.value = f"Общая сумма расходов: {total_sum}"
-        page.update()
-
-    def refresh_list():
-        expenses_list.controls.clear()
-        for i, item in enumerate(expenses):
-            expenses_list.controls.append(
-                Row([
-                    Text(f"{item['name']}: {item['amount']}"),
-                    IconButton(icons.EDIT, tooltip="Редактировать", data=i, on_click=open_edit_dialog)
-                ])
+    def get_rows():
+        rows = []
+        for exp in db.all_expenses():
+            rows.append(
+                ft.Row(
+                    controls=[
+                        ft.Text(f"{exp[1]} сом", size=28),
+                        ft.Text(f"Категория: {exp[2]}", size=20, color=ft.Colors.BLUE),
+                        ft.IconButton(
+                            icon=ft.Icons.EDIT,
+                            icon_color=ft.Colors.GREEN,
+                            on_click=open_edit_modal,
+                            data=exp[0],
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE,
+                            icon_color=ft.Colors.RED,
+                            on_click=delete_expense,
+                            data=exp[0],
+                        ),
+                    ]
+                )
             )
-        update_total()
+        return rows
+
+    def refresh():
+        expense_list.controls = get_rows()
+        total_text.value = f"Общая сумма: {db.total_sum()} сом"
+        amount_input.value = ""
+        category_input.value = ""
+        page.update()
 
     def add_expense(e):
-        name = name_input.value.strip()
-        amount_str = amount_input.value.strip()
-        if not name or not amount_str:
-            page.snack_bar = Text("Заполните все поля")
-            page.snack_bar.open = True
-            page.update()
-            return
+        if amount_input.value and category_input.value:
+            db.add_expense(int(amount_input.value), category_input.value)
+            refresh()
 
-        try:
-            amount = float(amount_str)
-            if amount <= 0:
-                raise ValueError()
-        except ValueError:
-            page.snack_bar = Text("Сумма должна быть положительным числом")
-            page.snack_bar.open = True
-            page.update()
-            return
+    def delete_expense(e):
+        db.delete_expense(e.control.data)
+        refresh()
 
-        expenses.append({"name": name, "amount": amount})
-        name_input.value = ""
-        amount_input.value = ""
-        refresh_list()
+    def open_edit_modal(e):
+        page.data = e.control.data
+        exp = db.get_expense(page.data)
+        amount_input.value = str(exp[1])
+        category_input.value = exp[2]
+        page.dialog = edit_modal
+        edit_modal.open = True
+        page.update()
 
-    def open_edit_dialog(e):
-        index = e.control.data
-        item = expenses[index]
-        edit_name.value = item["name"]
-        edit_amount.value = str(item["amount"])
+    def close_modal(e):
+        edit_modal.open = False
+        page.update()
 
-        def save_edit(ev):
-            new_name = edit_name.value.strip()
-            new_amount_str = edit_amount.value.strip()
-            try:
-                new_amount = float(new_amount_str)
-                if new_amount <= 0:
-                    raise ValueError()
-            except ValueError:
-                page.snack_bar = Text("Некорректная сумма")
-                page.snack_bar.open = True
-                page.update()
-                return
+    def update_expense(e):
+        db.update_expense(page.data, int(amount_input.value), category_input.value)
+        edit_modal.open = False
+        refresh()
 
-            expenses[index] = {"name": new_name, "amount": new_amount}
-            edit_dialog.open = False
-            refresh_list()
+    # UI
+    amount_input = ft.TextField(label="Сумма", width=200)
+    category_input = ft.TextField(label="Категория", width=200)
+    add_btn = ft.ElevatedButton("Добавить", on_click=add_expense)
+    total_text = ft.Text(f"Общая сумма: {db.total_sum()} сом", size=28)
+    expense_list = ft.Column(controls=get_rows(), scroll="auto", expand=True)
 
-        edit_dialog.title = Text("Редактировать расход")
-        edit_dialog.content = Column([edit_name, edit_amount], tight=True)
-        edit_dialog.actions = [
-            ElevatedButton(text="Сохранить", on_click=save_edit),
-            ElevatedButton(text="Отмена", on_click=lambda e: close_dialog())
+    edit_modal = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Редактировать расход"),
+        content=ft.Column([amount_input, category_input]),
+        actions=[
+            ft.ElevatedButton("Сохранить", on_click=update_expense),
+            ft.TextButton("Отменить", on_click=close_modal)
         ]
-        edit_dialog.open = True
-        page.dialog = edit_dialog
-        page.update()
-
-    def close_dialog():
-        edit_dialog.open = False
-        page.update()
-
-    # Кнопка добавления
-    add_button = ElevatedButton(text="Добавить расход", on_click=add_expense)
-
-    # Интерфейс
-    page.add(
-        name_input,
-        amount_input,
-        add_button,
-        Text("Список расходов:"),
-        expenses_list,
-        total_text
     )
 
-flet.app(target=main)
+    page.add(
+        ft.Text("Мои расходы", size=32),
+        ft.Row([amount_input, category_input, add_btn]),
+        total_text,
+        expense_list
+    )
 
+ft.app(main)
